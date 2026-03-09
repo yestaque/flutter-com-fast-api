@@ -1,7 +1,21 @@
+import 'pages/login_page.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:qr_flutter/qr_flutter.dart';
+import 'services/pedido_service.dart';
 
-void main() {
+import 'package:firebase_core/firebase_core.dart';
+
+import 'firebase_options.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   runApp(const MyApp());
 }
 
@@ -21,7 +35,128 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const AppPrincipal(),
+      home: const LoginPage(),
+    );
+  }
+}
+
+class WeatherService {
+  final String apiKey = "0d423f3ab994d4c07877121e620bf396";
+
+  // Buscar clima por cidade
+  Future<Map<String, dynamic>> getWeatherByCity(String city) async {
+    final url = Uri.parse(
+      "https://api.openweathermap.org/data/2.5/weather?q=$city&units=metric&lang=pt_br&appid=0d423f3ab994d4c07877121e620bf396",
+    );
+
+    final response = await http.get(url);
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception("Erro ao buscar clima: ${response.body}");
+    }
+  }
+
+  // Buscar clima por coordenadas
+  Future<Map<String, dynamic>> getWeatherByLocation(
+    double lat,
+    double lon,
+  ) async {
+    final url = Uri.parse(
+      "https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lon&units=metric&lang=pt_br&appid=0d423f3ab994d4c07877121e620bf396",
+    );
+
+    final response = await http.get(url);
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception("Erro ao buscar clima: ${response.body}");
+    }
+  }
+}
+
+class WeatherWidget extends StatefulWidget {
+  const WeatherWidget({super.key});
+
+  @override
+  State<WeatherWidget> createState() => _WeatherWidgetState();
+}
+
+class _WeatherWidgetState extends State<WeatherWidget> {
+  final weatherService = WeatherService();
+  Map<String, dynamic>? data;
+  String? erro;
+  bool carregando = true;
+
+  @override
+  void initState() {
+    super.initState();
+    buscarClima();
+  }
+
+  Future<void> buscarClima() async {
+    setState(() {
+      carregando = true;
+      erro = null;
+    });
+
+    try {
+      // Solicitar permissão e pegar localização
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        throw Exception("Permissão de localização negada");
+      }
+
+      Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      final resultado = await weatherService.getWeatherByLocation(
+        pos.latitude,
+        pos.longitude,
+      );
+
+      setState(() {
+        data = resultado;
+        carregando = false;
+      });
+    } catch (e) {
+      setState(() {
+        erro = e.toString();
+        carregando = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (carregando) return const CircularProgressIndicator();
+
+    if (erro != null) return Text('Erro: $erro');
+
+    return Column(
+      children: [
+        Text(
+          "${data!['main']['temp']}°C",
+          style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
+        ),
+        Text(
+          data!['weather'][0]['description'],
+          style: const TextStyle(fontSize: 16),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          "Cidade: ${data!['name']}",
+          style: const TextStyle(fontSize: 16, fontStyle: FontStyle.italic),
+        ),
+      ],
     );
   }
 }
@@ -32,11 +167,7 @@ class Produto {
   final double preco;
   final String imagem;
 
-  Produto({
-    required this.nome,
-    required this.preco,
-    required this.imagem,
-  });
+  Produto({required this.nome, required this.preco, required this.imagem});
 }
 
 class Avaliacao {
@@ -69,16 +200,152 @@ class DonoLoja {
   });
 }
 
+// Calcula CRC16-CCITT (padrão PIX)
+String calcularCRC16(String payload) {
+  int crc = 0xFFFF;
+
+  for (int i = 0; i < payload.length; i++) {
+    crc ^= (payload.codeUnitAt(i) << 8);
+
+    for (int j = 0; j < 8; j++) {
+      if ((crc & 0x8000) != 0) {
+        crc = (crc << 1) ^ 0x1021;
+      } else {
+        crc <<= 1;
+      }
+      crc &= 0xFFFF;
+    }
+  }
+
+  return crc.toRadixString(16).toUpperCase().padLeft(4, '0');
+}
+
+// Gera PIX dinâmico com valor e ID do pedido
+String gerarPixDinamico({
+  required String chavePix,
+  required String nome,
+  required String cidade,
+  required double valor,
+  required String idPedido,
+}) {
+  String valorFormatado = valor.toStringAsFixed(2);
+
+  String payloadSemCRC =
+      "000201"
+      "26580014BR.GOV.BCB.PIX"
+      "01${chavePix.length.toString().padLeft(2, '0')}$chavePix"
+      "52040000"
+      "5303986"
+      "54${valorFormatado.length.toString().padLeft(2, '0')}$valorFormatado"
+      "5802BR"
+      "59${nome.length.toString().padLeft(2, '0')}$nome"
+      "60${cidade.length.toString().padLeft(2, '0')}$cidade"
+      "62${(idPedido.length + 2).toString().padLeft(2, '0')}01$idPedido"
+      "6304";
+
+  String crc = calcularCRC16(payloadSemCRC);
+
+  return payloadSemCRC + crc;
+}
+
 /* ================= DADOS ================= */
 final List<Produto> produtos = [
-  Produto(nome: 'Vestido', preco: 25, imagem: 'lib/img/woman-2537564_1280.jpg'),
-  Produto(nome: 'Vestidos', preco: 20, imagem: 'lib/img/woman-6115105_1280.jpg'),
-  Produto(nome: 'Roupas de bazar', preco: 20, imagem: 'lib/img/bazaar-2835796_1920.jpg'),
-  Produto(nome: 'Corte Masculino', preco: 20, imagem: 'lib/img/homem-de-vista-lateral-cortando-o-cabelo.jpg'),
-  Produto(nome: 'Corte Feminino', preco: 20, imagem: 'lib/img/mulher-fazendo-tratamento-em-cabeleireiro.jpg'),
-  Produto(nome: 'Hidratação', preco: 50, imagem: 'lib/img/spa-4481538_1280.jpg'),
-  Produto(nome: 'Escova', preco: 50, imagem: 'lib/img/haircut-834280_1280.jpg'),
-  Produto(nome: 'Mão e pé', preco: 50, imagem: 'lib/img/people-2587157_1280.jpg'),
+  Produto(
+    nome: 'Vestido Longo',
+    preco: 25,
+    imagem: 'assets/img/vestidolongo.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Rosa',
+    preco: 20,
+    imagem: 'assets/img/vestidorosa.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Verde',
+    preco: 20,
+    imagem: 'assets/img/vestidoverde.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Verde Escuro',
+    preco: 20,
+    imagem: 'assets/img/vestidoverdeescuro.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Azul Longo',
+    preco: 20,
+    imagem: 'assets/img/vestidoazullongo.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Branco Longo',
+    preco: 20,
+    imagem: 'assets/img/vestidobrancolongo.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Preto Curto',
+    preco: 20,
+    imagem: 'assets/img/vestidopretocurto.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Rosa',
+    preco: 20,
+    imagem: 'assets/img/vestidorosa1.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Vermelho',
+    preco: 20,
+    imagem: 'assets/img/vestidovermelho.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Laranja',
+    preco: 20,
+    imagem: 'assets/img/vestidolaranja.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Amarelo',
+    preco: 20,
+    imagem: 'assets/img/vestidoamarelo.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Azul e branco',
+    preco: 20,
+    imagem: 'assets/img/vestidoazulebranco.jpg',
+  ),
+  Produto(
+    nome: 'Vestido Flor',
+    preco: 20,
+    imagem: 'assets/img/vestidoflor.jpg',
+  ),
+  Produto(nome: 'Macacão Floral', preco: 20, imagem: 'assets/img/macacao.jpg'),
+  Produto(
+    nome: 'Roupas de bazar',
+    preco: 20,
+    imagem: 'assets/img/bazaar-2835796_1920.jpg',
+  ),
+  Produto(
+    nome: 'Corte Masculino',
+    preco: 20,
+    imagem: 'assets/img/homem-de-vista-lateral-cortando-o-cabelo.jpg',
+  ),
+  Produto(
+    nome: 'Corte Feminino',
+    preco: 30,
+    imagem: 'assets/img/mulher-fazendo-tratamento-em-cabeleireiro.jpg',
+  ),
+  Produto(
+    nome: 'Sobrancelha',
+    preco: 25,
+    imagem: 'assets/img/spa-4481538_1280.jpg',
+  ),
+  Produto(
+    nome: 'Hidratação com Escova',
+    preco: 30,
+    imagem: 'assets/img/haircut-834280_1280.jpg',
+  ),
+  Produto(
+    nome: 'Mão e pé',
+    preco: 30,
+    imagem: 'assets/img/people-2587157_1280.jpg',
+  ),
 ];
 
 List<Produto> carrinho = [];
@@ -89,10 +356,10 @@ Map<Produto, List<Avaliacao>> avaliacoes = {};
 final dono = DonoLoja(
   nome: 'Gabriel Freire Bacelar',
   estado: 'Rio Grande do Norte',
-  telefone: '+55 84 99216-0269',
+  telefone: '+55 84 99166-6404',
   email: 'gabrielbacelar1000@gmail.com',
   descricao:
-      'Sou desenvolvedor web, mobile e design 3D. Desenvolvi esta loja de bazar virtual para venda de roupas e salão de beleza. Eu vendo sites, aplicativos móveis e design 3d para e-commerce faço um preço ótimo! Entre em contato comigo para saber sobre nossos serviços!',
+      'Sou desenvolvedor web, mobile e design 3D. Desenvolvi esta loja de bazar virtual para venda de roupas e salão de beleza. Eu vendo sites, aplicativos móveis e design 3d para e-commerce faço um preço ótimo! Entre em contato comigo: 84 99166-6404 chame no zap ou ligue para mim para saber sobre nossos serviços de tecnologia como sites e aplicativos!',
   idade: 22,
 );
 
@@ -116,7 +383,9 @@ class _AppPrincipalState extends State<AppPrincipal> {
       LojaPage(
         onAddCarrinho: (p) {
           setState(() {
-            carrinho.add(p);
+            if (!carrinho.contains(p)) {
+              carrinho.add(p);
+            }
             quantidade[p] = (quantidade[p] ?? 0) + 1;
           });
         },
@@ -138,7 +407,10 @@ class _AppPrincipalState extends State<AppPrincipal> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.store), label: 'Loja'),
-          BottomNavigationBarItem(icon: Icon(Icons.shopping_cart), label: 'Carrinho'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.shopping_cart),
+            label: 'Carrinho',
+          ),
         ],
       ),
     );
@@ -208,7 +480,6 @@ class _CarouselHomeState extends State<CarouselHome> {
   }
 }
 
-
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
@@ -218,6 +489,11 @@ class HomePage extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       children: [
         const CarouselHome(),
+        const SizedBox(height: 20),
+
+        // 🌤️ CLIMA AQUI
+        const Center(child: WeatherWidget()),
+
         const SizedBox(height: 20),
         const ClockDateWidget(),
         const SizedBox(height: 20),
@@ -241,6 +517,7 @@ class HomePage extends StatelessWidget {
   }
 }
 
+final String apiKey = "0d423f3ab994d4c07877121e620bf396";
 
 /* ================= RELÓGIO ================= */
 class ClockDateWidget extends StatefulWidget {
@@ -272,8 +549,14 @@ class _ClockDateWidgetState extends State<ClockDateWidget> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text('${now.day}/${now.month}/${now.year}', style: const TextStyle(fontSize: 18)),
-        Text('${now.hour}:${now.minute}:${now.second}', style: const TextStyle(fontSize: 28)),
+        Text(
+          '${now.day}/${now.month}/${now.year}',
+          style: const TextStyle(fontSize: 18),
+        ),
+        Text(
+          '${now.hour}:${now.minute}:${now.second}',
+          style: const TextStyle(fontSize: 28),
+        ),
       ],
     );
   }
@@ -335,13 +618,19 @@ class _LojaPageState extends State<LojaPage> {
                     Expanded(
                       child: Stack(
                         children: [
-                          Image.network(p.imagem, fit: BoxFit.cover, width: double.infinity),
+                          Image.asset(
+                            p.imagem,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                          ),
                           Positioned(
                             top: 4,
                             right: 4,
                             child: IconButton(
                               icon: Icon(
-                                favoritos.contains(p) ? Icons.favorite : Icons.favorite_border,
+                                favoritos.contains(p)
+                                    ? Icons.favorite
+                                    : Icons.favorite_border,
                                 color: Colors.red,
                               ),
                               onPressed: () => widget.onToggleFavorito(p),
@@ -354,13 +643,18 @@ class _LojaPageState extends State<LojaPage> {
                       padding: const EdgeInsets.all(8),
                       child: Column(
                         children: [
-                          Text(p.nome, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          Text(
+                            p.nome,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
                           Text('R\$ ${p.preco.toStringAsFixed(2)}'),
                           ElevatedButton(
                             onPressed: () {
                               widget.onAddCarrinho(p);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Adicionado ao carrinho')),
+                                const SnackBar(
+                                  content: Text('Adicionado ao carrinho'),
+                                ),
                               );
                             },
                             child: const Text('Adicionar'),
@@ -379,6 +673,7 @@ class _LojaPageState extends State<LojaPage> {
   }
 }
 
+/* ================= CARRINHO ================= */
 /* ================= CARRINHO ================= */
 class CarrinhoPage extends StatefulWidget {
   final VoidCallback onUpdate;
@@ -410,9 +705,37 @@ class _CarrinhoPageState extends State<CarrinhoPage> {
               quantidade[p] ??= 1;
 
               return ListTile(
-                leading: Image.network(p.imagem, width: 50),
+                leading: Image.asset(p.imagem, width: 50, fit: BoxFit.cover),
                 title: Text(p.nome),
-                subtitle: Text('R\$ ${(p.preco * quantidade[p]!).toStringAsFixed(2)}'),
+                subtitle: Text(
+                  'Quantidade: ${quantidade[p]!} • R\$ ${(p.preco * quantidade[p]!).toStringAsFixed(2)}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.remove),
+                      onPressed: () {
+                        setState(() {
+                          if (quantidade[p]! > 1) {
+                            quantidade[p] = quantidade[p]! - 1;
+                          } else {
+                            carrinho.remove(p);
+                            quantidade.remove(p);
+                          }
+                        });
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add),
+                      onPressed: () {
+                        setState(() {
+                          quantidade[p] = quantidade[p]! + 1;
+                        });
+                      },
+                    ),
+                  ],
+                ),
               );
             },
           ),
@@ -423,12 +746,18 @@ class _CarrinhoPageState extends State<CarrinhoPage> {
             children: [
               Text(
                 'Total: R\$ ${total.toStringAsFixed(2)}',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const CheckoutPixPage()));
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CheckoutPixPage()),
+                  );
                 },
                 child: const Text('Pagar com PIX'),
               ),
@@ -451,27 +780,56 @@ class CheckoutPixPage extends StatelessWidget {
       (s, p) => s + (p.preco * (quantidade[p] ?? 1)),
     );
 
+    // Gera um ID único de pedido (pode ser timestamp ou UUID)
+    String idPedido = DateTime.now().millisecondsSinceEpoch.toString();
+
+    // Gera QR dinâmico
+    String payload = gerarPixDinamico(
+      chavePix: "84992160269",
+      nome: "Gabriel Bacelar",
+      cidade: "NATAL",
+      valor: total,
+      idPedido: idPedido,
+    );
+
     return Scaffold(
       appBar: AppBar(title: const Text('Pagamento PIX')),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            const Icon(Icons.qr_code, size: 120),
-            Text('Total: R\$ ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 24)),
+            QrImageView(
+              data: payload,
+              size: 250,
+              backgroundColor: Colors.white,
+            ),
             const SizedBox(height: 20),
-            const SelectableText('84992160269'),
+            Text(
+              'Total: R\$ ${total.toStringAsFixed(2)}',
+              style: const TextStyle(fontSize: 24),
+            ),
+            const SizedBox(height: 20),
+            SelectableText('Chave PIX: 84992160269'),
             const Spacer(),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
+                final pedidoService = PedidoService();
+
+                await pedidoService.salvarPedido(
+                  total,
+                  carrinho.map((p) => p.nome).toList(),
+                );
+
                 carrinho.clear();
                 quantidade.clear();
+
                 Navigator.pop(context);
+
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Pedido finalizado!')),
+                  const SnackBar(content: Text("Pedido salvo no banco")),
                 );
               },
-              child: const Text('Finalizar Pedido'),
+              child: const Text("Finalizar Pedido"),
             ),
           ],
         ),
