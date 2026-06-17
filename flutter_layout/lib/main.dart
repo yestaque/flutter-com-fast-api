@@ -6,10 +6,18 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'services/pedido_service.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../services/pix_service.dart';
+import 'pages/produtos_page.dart';
 
+import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
+
+import 'pages/splash_page.dart';
+import 'pages/login_page.dart';
+import 'pages/produtos_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,7 +27,6 @@ void main() async {
   runApp(const MyApp());
 }
 
-/* ================= APP ================= */
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -27,15 +34,18 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Loja de Bazar',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.purple,
-          brightness: Brightness.dark,
-        ),
-      ),
-      home: const LoginPage(),
+
+      title: "Loja Distribuída",
+
+      initialRoute: "/",
+
+      routes: {
+        "/": (context) => const SplashPage(),
+
+        "/login": (context) => const LoginPage(),
+
+        "/produtos": (context) => const ProdutosPage(),
+      },
     );
   }
 }
@@ -50,6 +60,7 @@ class WeatherService {
     );
 
     final response = await http.get(url);
+    Uri.parse("http://localhost:8000/produtos");
 
     if (response.statusCode == 200) {
       return json.decode(response.body);
@@ -77,6 +88,16 @@ class WeatherService {
   }
 }
 
+Future<void> abrirWhatsApp() async {
+  final Uri url = Uri.parse(
+    "https://wa.me/5584991666404?text=Olá%20Gabriel,%20quero%20um%20site%20ou%20app",
+  );
+
+  if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+    throw 'Não foi possível abrir o WhatsApp';
+  }
+}
+
 class WeatherWidget extends StatefulWidget {
   const WeatherWidget({super.key});
 
@@ -97,13 +118,14 @@ class _WeatherWidgetState extends State<WeatherWidget> {
   }
 
   Future<void> buscarClima() async {
+    if (!mounted) return; // evita chamar setState se o widget já foi destruído
+
     setState(() {
       carregando = true;
       erro = null;
     });
 
     try {
-      // Solicitar permissão e pegar localização
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -123,11 +145,13 @@ class _WeatherWidgetState extends State<WeatherWidget> {
         pos.longitude,
       );
 
+      if (!mounted) return; // ✅ verificação antes de atualizar a UI
       setState(() {
         data = resultado;
         carregando = false;
       });
     } catch (e) {
+      if (!mounted) return; // ✅ mesma verificação
       setState(() {
         erro = e.toString();
         carregando = false;
@@ -485,24 +509,120 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final produtosDestaque = produtos.take(4).toList();
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Carrossel
         const CarouselHome(),
+
         const SizedBox(height: 20),
 
-        // 🌤️ CLIMA AQUI
+        // Clima
         const Center(child: WeatherWidget()),
 
         const SizedBox(height: 20),
+
+        // Relógio
         const ClockDateWidget(),
+
         const SizedBox(height: 20),
+
+        const Text(
+          "Produtos em Destaque",
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+        ),
+
+        const SizedBox(height: 10),
+
+        const Text(
+          "Mais vendidos",
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+        ),
+
+        SizedBox(
+          height: 220,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: produtosDestaque.length,
+            itemBuilder: (context, i) {
+              final p = produtosDestaque[i];
+
+              return Container(
+                width: 160,
+                margin: const EdgeInsets.only(right: 10),
+                child: Card(
+                  elevation: 4,
+                  child: Column(
+                    children: [
+                      Expanded(child: Image.asset(p.imagem, fit: BoxFit.cover)),
+
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Column(
+                          children: [
+                            Text(
+                              p.nome,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+
+                            Text("R\$ ${p.preco.toStringAsFixed(2)}"),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+
+        const SizedBox(height: 20),
+
+        const Text(
+          "Categorias",
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+        ),
+
+        const SizedBox(height: 10),
+
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: const [
+            CategoriaItem(icon: Icons.checkroom, nome: "Roupas"),
+
+            CategoriaItem(icon: Icons.spa, nome: "Beleza"),
+
+            CategoriaItem(icon: Icons.face, nome: "Salão"),
+          ],
+        ),
+
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.purple,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Text(
+            "Promoção da Semana 🔥\nVestidos por R\$20",
+            style: TextStyle(fontSize: 18),
+          ),
+        ),
+
+        const SizedBox(height: 30),
+
         const Text(
           'Bem-vindo à Loja de Bazar e Salão de Beleza!',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
         ),
+
         const SizedBox(height: 20),
+
         ElevatedButton(
           onPressed: () {
             Navigator.push(
@@ -510,8 +630,38 @@ class HomePage extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const PerfilDonoPage()),
             );
           },
-          child: const Text('Sobre o Desenvolvedor do Aplicativo'),
+          child: const Text('Sobre o Desenvolvedor'),
         ),
+
+        ElevatedButton.icon(
+          onPressed: abrirWhatsApp,
+          icon: const Icon(Icons.chat),
+          label: const Text("Falar no WhatsApp"),
+        ),
+      ],
+    );
+  }
+}
+
+class CategoriaItem extends StatelessWidget {
+  final IconData icon;
+  final String nome;
+
+  const CategoriaItem({super.key, required this.icon, required this.nome});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        CircleAvatar(
+          radius: 28,
+          backgroundColor: Colors.purple,
+          child: Icon(icon, color: Colors.white),
+        ),
+
+        const SizedBox(height: 6),
+
+        Text(nome),
       ],
     );
   }
@@ -770,8 +920,22 @@ class _CarrinhoPageState extends State<CarrinhoPage> {
 }
 
 /* ================= CHECKOUT ================= */
-class CheckoutPixPage extends StatelessWidget {
+class CheckoutPixPage extends StatefulWidget {
   const CheckoutPixPage({super.key});
+
+  @override
+  State<CheckoutPixPage> createState() => _CheckoutPixPageState();
+}
+
+final pixService = PixService();
+
+class _CheckoutPixPageState extends State<CheckoutPixPage> {
+  bool carregando = false;
+
+  String? qrPix;
+  String? idPagamento;
+
+  Timer? timer;
 
   @override
   Widget build(BuildContext context) {
@@ -780,61 +944,119 @@ class CheckoutPixPage extends StatelessWidget {
       (s, p) => s + (p.preco * (quantidade[p] ?? 1)),
     );
 
-    // Gera um ID único de pedido (pode ser timestamp ou UUID)
-    String idPedido = DateTime.now().millisecondsSinceEpoch.toString();
-
-    // Gera QR dinâmico
-    String payload = gerarPixDinamico(
-      chavePix: "84992160269",
-      nome: "Gabriel Bacelar",
-      cidade: "NATAL",
-      valor: total,
-      idPedido: idPedido,
-    );
-
     return Scaffold(
       appBar: AppBar(title: const Text('Pagamento PIX')),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            QrImageView(
-              data: payload,
-              size: 250,
-              backgroundColor: Colors.white,
-            ),
+            /// QR CODE
+            qrPix == null
+                ? const Text("Clique em gerar PIX")
+                : QrImageView(
+                    data: qrPix!,
+                    size: 250,
+                    backgroundColor: Colors.white,
+                  ),
+
             const SizedBox(height: 20),
+
             Text(
               'Total: R\$ ${total.toStringAsFixed(2)}',
               style: const TextStyle(fontSize: 24),
             ),
+
             const SizedBox(height: 20),
-            SelectableText('Chave PIX: 84992160269'),
+
+            const SelectableText('Chave PIX: 84992160269'),
+
             const Spacer(),
+
+            /// BOTÃO GERAR PIX
             ElevatedButton(
               onPressed: () async {
-                final pedidoService = PedidoService();
+                setState(() {
+                  carregando = true;
+                });
 
-                await pedidoService.salvarPedido(
-                  total,
-                  carrinho.map((p) => p.nome).toList(),
-                );
+                try {
+                  final pix = await pixService.criarPix(total);
 
-                carrinho.clear();
-                quantidade.clear();
+                  setState(() {
+                    qrPix = pix["qr"];
+                    idPagamento = pix["id"];
+                    carregando = false;
+                  });
 
-                Navigator.pop(context);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Pedido salvo no banco")),
-                );
+                  verificarPagamento();
+                } catch (e) {
+                  setState(() {
+                    carregando = false;
+                  });
+                }
               },
-              child: const Text("Finalizar Pedido"),
+              child: const Text("Gerar PIX"),
             ),
+
+            const SizedBox(height: 10),
+
+            /// FINALIZAR PEDIDO
+            carregando
+                ? const CircularProgressIndicator()
+                : ElevatedButton(
+                    onPressed: () async {
+                      final pedidoService = PedidoService();
+
+                      List<String> produtosPedido = carrinho
+                          .map((p) => p.nome)
+                          .toList();
+
+                      await pedidoService.salvarPedido(total, produtosPedido);
+
+                      carrinho.clear();
+                      quantidade.clear();
+
+                      if (!mounted) return;
+
+                      Navigator.pop(context);
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Pedido finalizado com sucesso"),
+                        ),
+                      );
+                    },
+                    child: const Text("Finalizar Pedido"),
+                  ),
           ],
         ),
       ),
     );
+  }
+
+  /// VERIFICA PAGAMENTO AUTOMÁTICO
+  void verificarPagamento() {
+    timer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (idPagamento == null) return;
+
+      final status = await pixService.verificarPagamento(idPagamento!);
+
+      if (status["status"] == "approved") {
+        timer.cancel();
+
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("Pagamento confirmado")));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
   }
 }
 
