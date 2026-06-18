@@ -7,6 +7,10 @@ flutter pub get
 flutter run
 
  pip install fastapi uvicorn sqlalchemy psycopg2-binary
+ 
+ 
+ <img width="1536" height="1024" alt="IMG-20260617-WA0002" src="https://github.com/user-attachments/assets/af769159-2e4a-467d-b280-e6969c9ac4dc" />
+
 
 queria colocar para rodar isso para melhorar funcionar 
 
